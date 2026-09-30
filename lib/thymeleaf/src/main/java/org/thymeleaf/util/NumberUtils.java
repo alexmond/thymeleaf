@@ -26,6 +26,7 @@ import java.util.ArrayList;
 import java.util.Currency;
 import java.util.List;
 import java.util.Locale;
+import java.util.concurrent.ConcurrentHashMap;
 
 /**
  * 
@@ -203,17 +204,86 @@ public final class NumberUtils {
             return null;
         }
 
-        DecimalFormat format = (DecimalFormat)NumberFormat.getNumberInstance(locale);
-        format.setMinimumFractionDigits(fractionDigits.intValue());
-        format.setMaximumFractionDigits(fractionDigits.intValue());
-        if (minIntegerDigits != null) {
-            format.setMinimumIntegerDigits(minIntegerDigits.intValue());
+        // Creating and configuring a DecimalFormat is far more expensive than formatting, so configured formats
+        // are cached and cloned for each use (DecimalFormat is not thread-safe)
+        final DecimalFormatKey key =
+                new DecimalFormatKey(minIntegerDigits, thousandsPointType, fractionDigits.intValue(), decimalPointType, locale);
+        DecimalFormat format = DECIMAL_FORMATS.get(key);
+        if (format == null) {
+            format = createDecimalFormat(key);
+            if (DECIMAL_FORMATS.size() < DECIMAL_FORMATS_MAX_SIZE) {
+                DECIMAL_FORMATS.putIfAbsent(key, format);
+            }
         }
-        format.setDecimalSeparatorAlwaysShown(decimalPointType != NumberPointType.NONE && fractionDigits.intValue() > 0);
-        format.setGroupingUsed(thousandsPointType != NumberPointType.NONE);
-        format.setDecimalFormatSymbols(computeDecimalFormatSymbols(decimalPointType, thousandsPointType, locale));
-        
-        return format.format(target);
+
+        return ((DecimalFormat) format.clone()).format(target);
+    }
+
+
+    private static DecimalFormat createDecimalFormat(final DecimalFormatKey key) {
+        final DecimalFormat format = (DecimalFormat)NumberFormat.getNumberInstance(key.locale);
+        format.setMinimumFractionDigits(key.fractionDigits);
+        format.setMaximumFractionDigits(key.fractionDigits);
+        if (key.minIntegerDigits != null) {
+            format.setMinimumIntegerDigits(key.minIntegerDigits.intValue());
+        }
+        format.setDecimalSeparatorAlwaysShown(key.decimalPointType != NumberPointType.NONE && key.fractionDigits > 0);
+        format.setGroupingUsed(key.thousandsPointType != NumberPointType.NONE);
+        format.setDecimalFormatSymbols(computeDecimalFormatSymbols(key.decimalPointType, key.thousandsPointType, key.locale));
+        return format;
+    }
+
+
+    private static final int DECIMAL_FORMATS_MAX_SIZE = 500;
+    private static final ConcurrentHashMap<DecimalFormatKey,DecimalFormat> DECIMAL_FORMATS =
+            new ConcurrentHashMap<DecimalFormatKey,DecimalFormat>();
+
+
+    private static final class DecimalFormatKey {
+
+        private final Integer minIntegerDigits;
+        private final NumberPointType thousandsPointType;
+        private final int fractionDigits;
+        private final NumberPointType decimalPointType;
+        private final Locale locale;
+        private final int hash;
+
+        DecimalFormatKey(final Integer minIntegerDigits, final NumberPointType thousandsPointType,
+                         final int fractionDigits, final NumberPointType decimalPointType, final Locale locale) {
+            this.minIntegerDigits = minIntegerDigits;
+            this.thousandsPointType = thousandsPointType;
+            this.fractionDigits = fractionDigits;
+            this.decimalPointType = decimalPointType;
+            this.locale = locale;
+            int h = (minIntegerDigits == null ? -1 : minIntegerDigits.intValue());
+            h = 31 * h + thousandsPointType.hashCode();
+            h = 31 * h + fractionDigits;
+            h = 31 * h + decimalPointType.hashCode();
+            h = 31 * h + locale.hashCode();
+            this.hash = h;
+        }
+
+        @Override
+        public boolean equals(final Object o) {
+            if (this == o) {
+                return true;
+            }
+            if (!(o instanceof DecimalFormatKey)) {
+                return false;
+            }
+            final DecimalFormatKey other = (DecimalFormatKey) o;
+            return this.fractionDigits == other.fractionDigits
+                    && this.thousandsPointType == other.thousandsPointType
+                    && this.decimalPointType == other.decimalPointType
+                    && (this.minIntegerDigits == null ? other.minIntegerDigits == null : this.minIntegerDigits.equals(other.minIntegerDigits))
+                    && this.locale.equals(other.locale);
+        }
+
+        @Override
+        public int hashCode() {
+            return this.hash;
+        }
+
     }
 
 

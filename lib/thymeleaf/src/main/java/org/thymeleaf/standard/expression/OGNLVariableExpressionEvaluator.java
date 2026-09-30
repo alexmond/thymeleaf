@@ -94,6 +94,13 @@ public final class OGNLVariableExpressionEvaluator
         final OGNLContextPropertyAccessor accessor = new OGNLContextPropertyAccessor();
         OgnlRuntime.setPropertyAccessor(IContext.class, accessor);
 
+        /*
+         * REGISTER A CACHING PROPERTY ACCESSOR FOR RECORDS (if running on Java 16+)
+         */
+        if (OGNLRecordPropertyAccessor.RECORD_CLASS != null) {
+            OgnlRuntime.setPropertyAccessor(OGNLRecordPropertyAccessor.RECORD_CLASS, new OGNLRecordPropertyAccessor());
+        }
+
     }
 
 

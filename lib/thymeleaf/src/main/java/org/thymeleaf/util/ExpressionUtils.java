@@ -155,10 +155,22 @@ public final class ExpressionUtils {
     private static final Set<String> BLOCKED_CLASS_METHODS =
             Arrays.stream(Class.class.getDeclaredMethods()).map(Method::getName).collect(Collectors.toSet());
 
+    // Names of the methods declared by each of the ALLOWED_JAVA_SUPERS
+    private static final Map<Class<?>,Set<String>> ALLOWED_JAVA_SUPERS_METHOD_NAMES;
+
+    private static final ClassValue<Boolean> TYPE_BLOCKED_FOR_MEMBER_ACCESS = new ClassValue<Boolean>() {
+        @Override
+        protected Boolean computeValue(final Class<?> type) {
+            return Boolean.valueOf(isTypeBlockedForAllPurposes(type.getName()) || isTypeBlockedForMemberCalls(type));
+        }
+    };
+
 
     static {
         ALLOWED_JAVA_CLASS_NAMES = ALLOWED_JAVA_CLASSES.stream().map(Class::getName).collect(Collectors.toSet());
         ALLOWED_JAVA_SUPERS_NAMES = ALLOWED_JAVA_SUPERS.stream().map(Class::getName).collect(Collectors.toSet());
+        ALLOWED_JAVA_SUPERS_METHOD_NAMES = ALLOWED_JAVA_SUPERS.stream().collect(Collectors.toMap(
+                i -> i, i -> Arrays.stream(i.getDeclaredMethods()).map(Method::getName).collect(Collectors.toSet())));
         BLOCKED_MEMBER_CALL_JAVA_SUPERS = BLOCKED_MEMBER_CALL_JAVA_SUPERS_NAMES.stream().
                 map(className -> {
                     try {
@@ -202,18 +214,27 @@ public final class ExpressionUtils {
                 && typeName.charAt(2) == 'v' && typeName.charAt(3) == 'a');
     }
 
+    private static boolean startsWithAny(final String typeName, final Set<String> prefixes) {
+        for (final String prefix : prefixes) {
+            if (typeName.startsWith(prefix)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
     static boolean isTypeBlockedForAllPurposes(final String typeName) {
-        if (isJavaPackage(typeName) && ALLOWED_ALL_PURPOSES_PACKAGE_NAME_PREFIXES.stream().anyMatch(typeName::startsWith)) {
+        if (isJavaPackage(typeName) && startsWithAny(typeName, ALLOWED_ALL_PURPOSES_PACKAGE_NAME_PREFIXES)) {
             return false;
         }
-        return BLOCKED_ALL_PURPOSES_PACKAGE_NAME_PREFIXES.stream().anyMatch(typeName::startsWith);
+        return startsWithAny(typeName, BLOCKED_ALL_PURPOSES_PACKAGE_NAME_PREFIXES);
     }
 
     static boolean isTypeBlockedForTypeReference(final String typeName) {
         if (isTypeBlockedForAllPurposes(typeName)) {
             return true;
         }
-        return BLOCKED_TYPE_REFERENCE_PACKAGE_NAME_PREFIXES.stream().anyMatch(typeName::startsWith);
+        return startsWithAny(typeName, BLOCKED_TYPE_REFERENCE_PACKAGE_NAME_PREFIXES);
     }
 
 
@@ -236,7 +257,12 @@ public final class ExpressionUtils {
 
 
     static boolean isTypeBlockedForMemberCalls(final Class<?> type) {
-        return BLOCKED_MEMBER_CALL_JAVA_SUPERS.stream().anyMatch(i -> i.isAssignableFrom(type));
+        for (final Class<?> blockedSuper : BLOCKED_MEMBER_CALL_JAVA_SUPERS) {
+            if (blockedSuper.isAssignableFrom(type)) {
+                return true;
+            }
+        }
+        return false;
     }
 
 
@@ -244,9 +270,9 @@ public final class ExpressionUtils {
 
         Validate.notNull(type, "Type cannot be null");
 
-        final String typeName = type.getName();
-
-        if (!isTypeBlockedForAllPurposes(typeName) && !isTypeBlockedForMemberCalls(type)) {
+        // This check runs on every member access during expression evaluation, and its result only depends on
+        // the type, so it is computed once per class
+        if (!TYPE_BLOCKED_FOR_MEMBER_ACCESS.get(type).booleanValue()) {
             return false;
         }
 
@@ -271,9 +297,12 @@ public final class ExpressionUtils {
         }
 
         // Otherwise, we will restrict calls to methods declared in one of the allowed interfaces or superclasses
-        return ALLOWED_JAVA_SUPERS.stream()
-                .filter(i -> i.isAssignableFrom(type))
-                .noneMatch(i -> Arrays.stream(i.getDeclaredMethods()).anyMatch(m -> memberName.equals(m.getName())));
+        for (final Map.Entry<Class<?>,Set<String>> allowedSuper : ALLOWED_JAVA_SUPERS_METHOD_NAMES.entrySet()) {
+            if (allowedSuper.getKey().isAssignableFrom(type) && allowedSuper.getValue().contains(memberName)) {
+                return false;
+            }
+        }
+        return true;
 
     }
 
